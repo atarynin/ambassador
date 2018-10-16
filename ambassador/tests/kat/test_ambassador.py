@@ -413,6 +413,83 @@ service: {self.target.path.k8s}
         assert self.results[2].backend.request.url.path == "/"
 
 
+class TracingTest(Test):
+
+    def init(self):
+        self.target = HTTP()
+        self.with_tracing = AmbassadorTest()
+        self.no_tracing = AmbassadorTest()
+
+    def manifests(self) -> str:
+        return super().manifests() + """
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zipkin
+spec:
+  selector:
+    app: zipkin
+  ports:
+  - port: 9411
+    name: http
+    targetPort: http
+  type: NodePort
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: zipkin
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: zipkin
+    spec:
+      containers:
+      - name: zipkin
+        image: openzipkin/zipkin
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 9411
+"""
+
+    def config(self):
+        # Use self.target here, because we want this mapping to be annotated
+        # on the service, not the Ambassador.
+        yield self.target, self.format("""
+---
+apiVersion: ambassador/v0
+kind:  Mapping
+name:  tracing_target_mapping
+prefix: /target/
+ambassador_id: [ {self.with_tracing.ambassador_id}, {self.no_tracing.ambassador_id} ] 
+service: {self.target.path.k8s}
+""")
+
+        # For self.with_tracing, we want to configure the TracingService.
+        yield self.with_tracing, self.format("""
+---
+apiVersion: ambassador/v0
+kind: TracingService
+name: tracing
+service: zipkin:9411
+driver: zipkin
+""")
+
+    def queries(self):
+        # Speak through each Ambassador to the traced service...
+        yield Query(self.with_tracing.url("target/"))
+        yield Query(self.no_tracing.url("target/"))
+
+        # ...then ask the Zipkin for services and spans.
+        yield Query("http://zipkin/api/v2/services")
+        yield Query("http://zipkin/api/v2/spans")
+
 # pytest will find this because Runner is a toplevel callable object in a file
 # that pytest is willing to look inside.
 #
@@ -420,4 +497,4 @@ service: {self.target.path.k8s}
 # - Runner(cls) will look for variants of _every subclass_ of cls.
 # - Any class you pass to Runner needs to be standalone (it must have its
 #   own manifests and be able to set up its own world).
-main = Runner(AmbassadorTest)
+main = Runner(AmbassadorTest, TracingTest)
