@@ -61,9 +61,11 @@ RUN chgrp -R 0 ${AMBASSADOR_ROOT} && \
 # COPY the entrypoint script and make it runnable.
 COPY kubewatch.py .
 COPY entrypoint.sh .
+COPY hot-restarter.py .
+COPY start-envoy.sh .
 # XXX: ambex needs to be replaced with a proper release, or made traceable or something!!!
 COPY ambex .
-COPY bootstrap-ads.yaml .
-RUN chmod 755 entrypoint.sh
+# COPY bootstrap-ads.yaml .
+RUN chmod 755 entrypoint.sh hot-restarter.py start-envoy.sh
 
 ENTRYPOINT [ "./entrypoint.sh" ]

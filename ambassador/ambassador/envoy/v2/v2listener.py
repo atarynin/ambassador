@@ -155,17 +155,26 @@ class V2Listener(dict):
         if require_tls:
             vhost['require_tls'] = require_tls
 
+        hcm_config = {
+            'stat_prefix': 'ingress_http',
+            'access_log': access_log,
+            'http_filters': filters,
+            'route_config': {
+                'virtual_hosts': [ vhost ]
+            }
+        }
+
+        if config.ir.tracing:
+            hcm_config["generate_request_id"] = True
+            hcm_config["tracing"] = {
+                "operation_name": "egress",
+                "request_headers_for_tags": config.ir.tracing.get('tag_headers', [])
+            }
+
         chain = {
             'filters': [ {
                 'name': 'envoy.http_connection_manager',
-                'config': {
-                    'stat_prefix': 'ingress_http',
-                    'access_log': access_log,
-                    'http_filters': filters,
-                    'route_config': {
-                        'virtual_hosts': [ vhost ]
-                    }
-                }
+                'config': hcm_config
             } ]
         }
 

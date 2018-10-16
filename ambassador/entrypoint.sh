@@ -21,8 +21,6 @@ AMBASSADOR_ROOT="/ambassador"
 CONFIG_DIR="$AMBASSADOR_ROOT/ambassador-config"
 ENVOY_CONFIG_FILE="$AMBASSADOR_ROOT/envoy.json"
 
-export PYTHON_EGG_CACHE=${AMBASSADOR_ROOT}
-
 if [ "$1" == "--demo" ]; then
     CONFIG_DIR="$AMBASSADOR_ROOT/ambassador-demo-config"
 fi
@@ -33,11 +31,15 @@ APPDIR=${APPDIR:-"$AMBASSADOR_ROOT"}
 
 # If we don't set PYTHON_EGG_CACHE explicitly, /.cache is set by default, which fails when running as a non-privileged
 # user
-export PYTHON_EGG_CACHE=${APPDIR/.cache}
+PYTHON_EGG_CACHE=${APPDIR/.cache}
+export PYTHON_EGG_CACHE
 
-export PYTHONUNBUFFERED=true
+PYTHONUNBUFFERED=true
+export PYTHONUNBUFFERED
 
 pids=""
+
+AMBASSADOR_EXIT_DELAY=600
 
 ambassador_exit() {
     RC=${1:-0}
@@ -120,37 +122,44 @@ handle_statsd() {
 trap "handle_chld" CHLD
 trap "handle_int" INT
 
-/usr/bin/python3 "$APPDIR/kubewatch.py" sync "$CONFIG_DIR" "$ENVOY_CONFIG_FILE"
-
-STATUS=$?
-
-if [ $STATUS -ne 0 ]; then
-    diediedie "kubewatch sync" "$STATUS"
-fi
-
-echo "AMBASSADOR: starting diagd"
-diagd "$CONFIG_DIR" &
-pids="${pids:+${pids} }$!:diagd"
-
-echo "AMBASSADOR: starting ads"
-./ambex /ambassador/envoy &
-AMBEX_PID="$!"
-pids="${pids:+${pids} }${AMBEX_PID}:ambex"
-
-echo "AMBASSADOR: starting Envoy"
-envoy -c bootstrap-ads.yaml &
-pids="${pids:+${pids} }$!:envoy"
-
-/usr/bin/python3 "$APPDIR/kubewatch.py" watch "$CONFIG_DIR" "$ENVOY_CONFIG_FILE" -p "${AMBEX_PID}" --delay "${DELAY}" &
-pids="${pids:+${pids} }$!:kubewatch"
-
-if [ "$(echo ${STATSD_ENABLED} | tr "[:upper:]" "[:lower:]")" = "true" ]; then
-    echo "STATSD_ENABLED is set to true"
-    # Fallback to statsd-sink if a host isn't provided
-    STATSD_HOST="${STATSD_HOST:-statsd-sink}"
-    handle_statsd ${STATSD_HOST} &
+if false; then
+    sleep 3600 &
+    pids="${pids:+${pids} }$!:sleep"
 else
-    echo "STATSD_ENABLED is not set to true, no stats will be exposed"
+    /usr/bin/python3 "$APPDIR/kubewatch.py" sync "$CONFIG_DIR" "$ENVOY_CONFIG_FILE"
+
+    STATUS=$?
+
+    if [ $STATUS -ne 0 ]; then
+        diediedie "kubewatch sync" "$STATUS"
+    fi
+
+    echo "AMBASSADOR: starting diagd"
+    diagd "$CONFIG_DIR" &
+    pids="${pids:+${pids} }$!:diagd"
+
+    echo "AMBASSADOR: starting ads"
+    ./ambex /ambassador/envoy &
+    AMBEX_PID="$!"
+    pids="${pids:+${pids} }${AMBEX_PID}:ambex"
+
+    echo "AMBASSADOR: starting Envoy"
+    /usr/bin/python3 "$APPDIR/hot-restarter.py" "$APPDIR/start-envoy.sh" &
+    RESTARTER_PID="$!"
+    pids="${pids:+${pids} }${RESTARTER_PID}:envoy"
+
+    /usr/bin/python3 "$APPDIR/kubewatch.py" watch "$CONFIG_DIR" "$ENVOY_CONFIG_FILE" \
+        --ads-pid "${AMBEX_PID}" --restarter-pid "${RESTARTER_PID}" --delay "${DELAY}" &
+    pids="${pids:+${pids} }$!:kubewatch"
+
+    if [ "$(echo ${STATSD_ENABLED} | tr "[:upper:]" "[:lower:]")" = "true" ]; then
+        echo "STATSD_ENABLED is set to true"
+        # Fallback to statsd-sink if a host isn't provided
+        STATSD_HOST="${STATSD_HOST:-statsd-sink}"
+        handle_statsd ${STATSD_HOST} &
+    else
+        echo "STATSD_ENABLED is not set to true, no stats will be exposed"
+    fi
 fi
 
 echo "AMBASSADOR: waiting"

@@ -441,12 +441,13 @@ service: {self.target.path.k8s}
         assert self.results[2].backend.request.url.path == "/"
 
 
-class TracingTest(Test):
+class TracingTest(AmbassadorTest):
+    debug = True
 
     def init(self):
         self.target = HTTP()
-        self.with_tracing = AmbassadorTest()
-        self.no_tracing = AmbassadorTest()
+        # self.with_tracing = AmbassadorTest(name="ambassador-with-tracing")
+        # self.no_tracing = AmbassadorTest(name="ambassador-no-tracing")
 
     def manifests(self) -> str:
         return super().manifests() + """
@@ -489,18 +490,18 @@ spec:
     def config(self):
         # Use self.target here, because we want this mapping to be annotated
         # on the service, not the Ambassador.
+        # ambassador_id: [ {self.with_tracing.ambassador_id}, {self.no_tracing.ambassador_id} ]
         yield self.target, self.format("""
 ---
 apiVersion: ambassador/v0
 kind:  Mapping
 name:  tracing_target_mapping
 prefix: /target/
-ambassador_id: [ {self.with_tracing.ambassador_id}, {self.no_tracing.ambassador_id} ] 
 service: {self.target.path.k8s}
 """)
 
         # For self.with_tracing, we want to configure the TracingService.
-        yield self.with_tracing, self.format("""
+        yield self, self.format("""
 ---
 apiVersion: ambassador/v0
 kind: TracingService
@@ -511,12 +512,13 @@ driver: zipkin
 
     def queries(self):
         # Speak through each Ambassador to the traced service...
-        yield Query(self.with_tracing.url("target/"))
-        yield Query(self.no_tracing.url("target/"))
+        # yield Query(self.with_tracing.url("target/"))
+        # yield Query(self.no_tracing.url("target/"))
+        yield Query(self.url("target/"))
 
         # ...then ask the Zipkin for services and spans.
-        yield Query("http://zipkin/api/v2/services")
-        yield Query("http://zipkin/api/v2/spans")
+        yield Query("http://zipkin:9411/api/v2/services")
+        yield Query("http://zipkin:9411/api/v2/spans")
 
 # pytest will find this because Runner is a toplevel callable object in a file
 # that pytest is willing to look inside.
@@ -525,4 +527,6 @@ driver: zipkin
 # - Runner(cls) will look for variants of _every subclass_ of cls.
 # - Any class you pass to Runner needs to be standalone (it must have its
 #   own manifests and be able to set up its own world).
-main = Runner(AmbassadorTest, TracingTest)
+main = Runner(AmbassadorTest
+              # , TracingTest
+             )
